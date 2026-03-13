@@ -5,6 +5,7 @@
 /// - email (str): the email address of the author
 /// -> (block): a block containing the email address
 #let mail(email) = {
+  show raw: set text(size: 0.8em)
   text(size: 1.2em)[#raw(email)]
 }
 
