@@ -52,7 +52,7 @@
 ) = {
   block(
     width: 100%,
-    inset: (x: 24pt, y: 18pt),
+    inset: (x: 16pt, y: 12pt),
     fill: fill-color,
     radius: 8pt,
     stroke: (
@@ -102,3 +102,27 @@
     title-color: rgb("#e65100"),
   )
 }
+
+#let placeholder-figure(
+  title,
+  caption: none,
+  height: 5.8cm,
+  fill-color: rgb("#f5f5f5"),
+  stroke-color: rgb("#b0bec5"),
+) = figure(
+  placement: none,
+  caption: caption,
+  block(
+    width: 100%,
+    height: height,
+    inset: 18pt,
+    radius: 10pt,
+    fill: fill-color,
+    stroke: (paint: stroke-color, thickness: 1.5pt, dash: "dashed"),
+    align(center + horizon)[
+      #text(size: 1.4em, weight: "bold", fill: rgb("#546e7a"))[#title]
+      #v(0.4em)
+      #text(size: 0.9em, fill: rgb("#607d8b"))[Placeholder image]
+    ],
+  ),
+)
