@@ -41,17 +41,36 @@
     neutral-dark: rgb("#23373b"),
     neutral-darkest: rgb("#23373b"),
   ),
+  config-methods(
+    init: (self: none, body) => {
+      set text(font: "Fira Sans", weight: "light", size: 18pt)
+      show math.equation: set text(font: "Fira Math")
+
+      show raw: set text(size: 1em, font: "JetBrains Mono")
+      // set raw(syntaxes: "Scala3/Scala 3.sublime-syntax")
+      show link: set text(
+        fill: rgb("#c46a11"),
+        weight: "medium",
+      )
+
+      show bibliography: set text(size: 0.75em)
+      show footnote.entry: set text(size: 0.75em)
+      set strong(delta: 200)
+      set par(justify: true)
+      body
+    }
+  )
 )
 
-#set text(font: "Fira Sans", weight: "light", size: 18pt)
-#show math.equation: set text(font: "Fira Math")
+// #set text(font: "Fira Sans", weight: "light", size: 16pt)
+// #show math.equation: set text(font: "Fira Math")
 
-#show raw.where(block: true): set text(size: 1em, font: "JetBrains Mono")
-#show raw.where(block: false): set text(size: 18pt, font: "JetBrains Mono")
+// #show raw.where(block: true): set text(size: 1em, font: "JetBrains Mono")
+// #show raw.where(block: false): set text(size: 16pt, font: "JetBrains Mono")
 
-#show bibliography: set text(size: 0.75em)
-#show footnote.entry: set text(size: 0.75em)
-#set par(justify: true)
+// #show bibliography: set text(size: 0.75em)
+// #show footnote.entry: set text(size: 0.75em)
+// #set par(justify: true)
 
 #title-slide(
   // extra: [
@@ -81,22 +100,56 @@
 
 = Introduction
 
-#slide(title: [Why actors?], composer: (1.3fr, 1fr))[
-  #feature-block(
-    [Motivation],
-    [
-      - Shared-state concurrency couples correctness to locks and thread scheduling.
-      - Actors isolate state and communicate only through asynchronous messages.
-      - This maps well to services, pipelines, supervisors, and distributed workflows.
-      - The model encourages explicit protocols instead of hidden method calls.
-    ],
-  )
+== Typical distributed system challenges
 
-  #placeholder-figure(
-    [Actor hierarchy sketch],
-    caption: [Use a future diagram to contrast isolated mailboxes with shared-state objects.],
-  )
+#components.side-by-side[
+  #warning-block("Components crash")[
+    #bold[Failures are the norm], not the exception.
+  ]
+][
+  #warning-block("Messages get lost")[
+    Messages can be #bold[lost], #bold[delayed], or #bold[duplicated].
+  ]
+][
+  #warning-block("Network instability")[
+    #bold[Latency], #bold[partitions], and #bold[topology changes].
+  ]
 ]
+
+#uncover("2")[
+  #feature-block("Designing with those in mind")[
+    These problems occurs regularly in distributed systems, so we need to design with them in mind.
+  ]
+]
+
+== Why actors?
+
+=== Easier concurrency
+  The actor model provides a level of abstraction that makes it easier to write correct concurrent and distributed software.
+
+=== Asynchronous messages
+  Actors communicate through asynchronous messages, which decouples the sender and receiver and allows for more flexible and scalable designs.
+
+
+=== Explicit protocols
+  The actor model encourages the use of explicit protocols, which can improve the clarity and maintainability of the code.
+
+// #slide(title: [Why actors?])[
+//   #feature-block(
+//     [Motivation],
+//     [
+//       - Shared-state concurrency couples correctness to locks and thread scheduling.
+//       - Actors isolate state and communicate only through asynchronous messages.
+//       - This maps well to services, pipelines, supervisors, and distributed workflows.
+//       - The model encourages explicit protocols instead of hidden method calls.
+//     ],
+//   )
+
+//   #placeholder-figure(
+//     [Actor hierarchy sketch],
+//     caption: [Use a future diagram to contrast isolated mailboxes with shared-state objects.],
+//   )
+// ]
 
 #slide(title: [What is Apache Pekko?])[
   #feature-block(
