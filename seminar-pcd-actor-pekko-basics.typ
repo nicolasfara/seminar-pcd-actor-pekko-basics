@@ -49,8 +49,9 @@
       show raw: set text(size: 1em, font: "JetBrains Mono")
       // set raw(syntaxes: "Scala3/Scala 3.sublime-syntax")
       show link: set text(
-        fill: rgb("#c46a11"),
-        weight: "medium",
+        font: "JetBrains Mono",
+        fill: rgb("#eb811b"),
+        // weight: "medium",
       )
 
       show bibliography: set text(size: 0.75em)
@@ -125,43 +126,25 @@
 == Why actors?
 
 === Easier concurrency
-  The actor model provides a level of abstraction that makes it easier to write correct concurrent and distributed software.
+  The actor model provides a level of abstraction that makes it *easier* to write correct *concurrent and distributed* software.
 
 === Asynchronous messages
-  Actors communicate through asynchronous messages, which decouples the sender and receiver and allows for more flexible and scalable designs.
-
+  Actors communicate *through asynchronous* messages, which #bold[decouples] the sender and receiver and allows for more *flexible* and *scalable* designs.
 
 === Explicit protocols
-  The actor model encourages the use of explicit protocols, which can improve the clarity and maintainability of the code.
+  The actor model encourages the use of *explicit protocols*, which can improve the clarity and maintainability of the code.
 
-// #slide(title: [Why actors?])[
-//   #feature-block(
-//     [Motivation],
-//     [
-//       - Shared-state concurrency couples correctness to locks and thread scheduling.
-//       - Actors isolate state and communicate only through asynchronous messages.
-//       - This maps well to services, pipelines, supervisors, and distributed workflows.
-//       - The model encourages explicit protocols instead of hidden method calls.
-//     ],
-//   )
+== Apache Pekko
 
-//   #placeholder-figure(
-//     [Actor hierarchy sketch],
-//     caption: [Use a future diagram to contrast isolated mailboxes with shared-state objects.],
-//   )
-// ]
+#components.side-by-side(columns: (2fr, 1fr), gutter: 2em)[
 
-#slide(title: [What is Apache Pekko?])[
-  #feature-block(
-    [Toolkit overview],
-    [
-      Apache Pekko is an open-source toolkit for building concurrent, distributed,
-      and resilient message-driven applications on the JVM.
+  === Toolkit overview
 
-      It carries forward the actor-based programming model, offers typed and classic APIs,
-      and integrates modules for clustering, streams, persistence, and testing.
-    ],
-  )
+  Apache Pekko is an open-source toolkit for building *concurrent*, *distributed*,
+  and *resilient* message-driven applications on the JVM.
+
+  It carries forward the #bold[actor-based] programming model, offers typed and classic APIs,
+  and integrates modules for clustering, streams, persistence, and testing.
 
   #note-block(
     [Historical note],
@@ -171,54 +154,99 @@
       to `org.apache.pekko` / `pekko.*`, plus updated dependency coordinates.
     ],
   )
+][
+  #figure(image("images/pekko-logo.png", height: 50%))
 ]
 
-#slide(title: [Core modules and ecosystem])[
-  #feature-block(
-    [Frequently used modules],
-    [
-      - `pekko-actor-typed`: typed actors and actor systems
-      - `pekko-actor-testkit-typed`: synchronous and asynchronous testing
-      - `pekko-stream`: Reactive Streams implementation
-      - `pekko-cluster-typed`, `pekko-persistence-typed`, and discovery/management modules
-      - Start local first; distributed features make sense once protocols and supervision are clear
-    ],
-  )
+== Useful links
+
+Website: #link("https://pekko.apache.org/")[pekko.apache.org/]
+
+Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apache.org/docs/pekko/current/]
+
+#note-block("Pekko API and DSL")[
+  Pekko provides APIs for developing actor-based systems with *Java* and *Scala* DSLs.
+
+  ```scala Pekko Typed``` new and type-safe API \
+  ```scala Pekko Classic``` legacy API, still supported but not recommended for new code
 ]
+
+== Core modules and ecosystem
+
+```scala
+"org.apache.pekko" %% "pekko-actor-typed" % PekkoVersion
+```
+Provides basic support for typed actors and actor systems.
+
+```scala
+"org.apache.pekko" %% "pekko-remote" % PekkoVersion
+```
+Remoting enables actors that live on different computers to seamlessly exchange messages. While distributed as a JAR artifact, Remoting resembles a module more than it does a library.
+
+```scala
+"org.apache.pekko" %% "pekko-cluster-typed" % PekkoVersion
+```
+Clustering gives you the ability to organize these into a “meta-system” tied together by a membership protocol
+
+```scala
+"org.apache.pekko" %% "pekko-cluster-sharding-typed" % PekkoVersion
+```
+Sharding is a pattern that mostly used together with Persistence to balance a large set of persistent entities
+
+```scala
+"org.apache.pekko" %% "pekko-cluster-singleton" % PekkoVersion
+```
+While this undeniably introduces a common bottleneck for the whole cluster that limits scaling, there are scenarios where the use of this pattern is unavoidable
+
+```scala
+"org.apache.pekko" %% "pekko-persistence-typed" % PekkoVersion
+```
+Persistence provides patterns to enable actors to persist events that lead to their current state.
+
+```scala
+"org.apache.pekko" %% "pekko-stream" % PekkoVersion
+```
+Streams provide a higher-level abstraction on top of actors that simplifies writing such processing networks, handling all the fine details in the background and providing a safe, typed, composable programming model.
 
 = Actor Foundations
 
-#slide(title: [The actor mental model])[
-  #feature-block(
-    [Each actor encapsulates three things],
-    [
-      1. State, hidden behind the actor reference
-      2. Behavior, chosen message by message
-      3. A mailbox, where incoming messages wait before processing
-    ],
-  )
-  #v(0.5em)
-  #components.side-by-side(columns: (1fr, 1fr), gutter: 8pt)[
-    #feature-block([On receive], [
-      - Send messages
-      - Spawn children
-      - Return the next behavior
-    ])
-  ][
-    #feature-block([Useful metaphors], [
-      - Workers and supervisors
-      - Delegation trees
-      - Failure ownership
-    ])
-  ]
-  #v(0.5em)
-  #note-block(
-    [Boundary],
-    [
-      Actors are not threads and not shared-memory objects.
-    ],
-  )
-]
+== Actor Architecture
+
+An _Actor_ in Pekko always belongs to a *parent*.
+
+#figure(image("images/actor-graph.png", height: 60%))
+
+// #slide(title: [The actor mental model])[
+//   #feature-block(
+//     [Each actor encapsulates three things],
+//     [
+//       1. State, hidden behind the actor reference
+//       2. Behavior, chosen message by message
+//       3. A mailbox, where incoming messages wait before processing
+//     ],
+//   )
+//   #v(0.5em)
+//   #components.side-by-side(columns: (1fr, 1fr), gutter: 8pt)[
+//     #feature-block([On receive], [
+//       - Send messages
+//       - Spawn children
+//       - Return the next behavior
+//     ])
+//   ][
+//     #feature-block([Useful metaphors], [
+//       - Workers and supervisors
+//       - Delegation trees
+//       - Failure ownership
+//     ])
+//   ]
+//   #v(0.5em)
+//   #note-block(
+//     [Boundary],
+//     [
+//       Actors are not threads and not shared-memory objects.
+//     ],
+//   )
+// ]
 
 #slide(title: [Actor systems, refs, and paths], composer: (1.2fr, 1fr))[
   #feature-block(
