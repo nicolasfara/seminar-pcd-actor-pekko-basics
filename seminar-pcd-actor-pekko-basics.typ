@@ -210,129 +210,222 @@ Streams provide a higher-level abstraction on top of actors that simplifies writ
 
 = Actor Foundations
 
+== Actor Anatomy
+
+*Actors* are entities that #bold[encapsulate] #underline[state] and #underline[behavior] and interact solely through *asynchronous message passing*.
+
+/ Behavior: upon message arrival, and actor can:
+  - Sends a finite number of messages to other actors
+  - Creates a finite number of child actors
+  - (must) Specify the next behavior to handle the next message
+
+/ Encapsulation: An actor is exposed to the outside through the ```scala ActorRef[T]```
+
+Actors are #bold[logical] entities, decoupled by physical concurrency. An actor is a lightweight object (\~300 bytes) that can be created in large numbers, and the runtime schedules them on a pool of threads.
+
 == Actor Architecture
 
 An _Actor_ in Pekko always belongs to a *parent*.
 
+Actors are created by ```scala ActorContext.spawn()``` and the #underline[creator] is the *parent* of the new actor.
+
 #figure(image("images/actor-graph.png", height: 60%))
 
-// #slide(title: [The actor mental model])[
-//   #feature-block(
-//     [Each actor encapsulates three things],
-//     [
-//       1. State, hidden behind the actor reference
-//       2. Behavior, chosen message by message
-//       3. A mailbox, where incoming messages wait before processing
-//     ],
-//   )
-//   #v(0.5em)
-//   #components.side-by-side(columns: (1fr, 1fr), gutter: 8pt)[
-//     #feature-block([On receive], [
-//       - Send messages
-//       - Spawn children
-//       - Return the next behavior
-//     ])
-//   ][
-//     #feature-block([Useful metaphors], [
-//       - Workers and supervisors
-//       - Delegation trees
-//       - Failure ownership
-//     ])
-//   ]
-//   #v(0.5em)
-//   #note-block(
-//     [Boundary],
-//     [
-//       Actors are not threads and not shared-memory objects.
-//     ],
-//   )
-// ]
+- `/` is the #bold[root guardian], which supervises the system guardian and the user guardian.
+- `/system` is the #bold[system guardian], which supervises system actors created by Pekko modules.
+- `/user` is the #bold[user guardian], which supervises all actors created by #underline[user code].
 
-#slide(title: [Actor systems, refs, and paths], composer: (1.2fr, 1fr))[
-  #feature-block(
-    [System structure],
-    [
-      - An `ActorSystem[T]` is the heavyweight runtime container.
-      - A system manages dispatchers, scheduling, addresses, and top-level guardians.
-      - Recommendation: one actor system per logical application boundary.
-      - Child actors form a supervision hierarchy under `/user`.
-    ],
-  )
-  #note-block(
-    [Reference vs path],
-    [
-      - `ActorRef[T]`: capability to send messages to a live actor
-      - Actor path: a name in the hierarchy, whether currently inhabited or not
-      - Ordering is guaranteed per sender/receiver pair, not globally
-    ],
-  )
+#slide[
+  Printing the ```scala ActorRef``` shows the hierarchy path.
 
-  #placeholder-figure(
-    [System /user /system layout],
-    caption: [Replace with a hierarchy diagram if you later add custom visuals.],
-    height: 5.2cm,
+  #codly(
+    header: [`basics / io.github.nicolasfara.es00.ActorHierarchyExample.scala`],
+    header-cell-args: (align: center, ),
   )
+  ```scala
+  class PrintMyActorRef(context: ActorContext[String]) extends
+    AbstractBehavior[String](context) {
+
+    override def onMessage(msg: String): Behavior[String] =
+      msg match {
+        case "printit" =>
+          val secondRef = context.spawn(Behaviors.empty[String], "second-actor")
+          println(s"Second: $secondRef")
+          this
+      }
+  }
+  ```
 ]
 
-#slide(title: [Mailboxes, isolation, and throughput])[
-  #feature-block(
-    [Operational intuition],
-    [
-      - Actors are logical concurrency units; dispatchers decide which threads run them.
-      - Lightweight actors scale because most actors are inactive most of the time.
-      - Message passing removes lock sharing, but protocol design still matters.
-      - At-most-once delivery means failures and retries belong in the protocol or infrastructure.
-    ],
-  )
-  #v(0.5em)
-  #warning-block(
-    [Important boundary],
-    [
-      Actor isolation does not magically remove back-pressure, overload, or failure handling.
-      It gives you a disciplined place to model them.
-    ],
-  )
+== Pekko Actor System
+
+An *Actor System* is a hierarchical group of actors which share common configuration, including #bold[dispatchers], #bold[mailboxes], and #bold[addresses]. It is the root of the actor hierarchy and provides the main entry point for creating actors.
+
+#warning-block("Heavyweight structure")[
+  It will allocate and manage #bold[1..N threads], and it is recommended to have one actor system per logical application boundary.
 ]
+
+=== Hierarchical structure
+
+- Splitting problems into smaller pieces
+- Handling failures
+- *Supervision model* (ispired by Erlang's "let it crash" philosophy)
+
+== Actor systems, refs, and paths
+#feature-block(
+  [Three ideas to keep],
+  [
+    - `ActorSystem[T]` is the runtime root: create it once per logical application boundary.
+    - Actors live in a #bold[hierarchy], with user actors supervised 
+    - `ActorRef[T]` is the typed capability you share to let others send protocol messages.
+  ],
+)
+
+#note-block(
+  [Path intuition],
+  [
+    - An actor path names a position in the hierarchy, even when no actor is currently running there.
+    - A reference points to a concrete live actor incarnation at that path.
+    - Ordering is local: guaranteed for one sender and one receiver pair, not across the whole system.
+  ],
+)
+
+// == Mailboxes, isolation, and throughput
+// #feature-block(
+//   [Operational intuition],
+//   [
+//     - Actors are logical concurrency units; dispatchers decide which threads run them.
+//     - Lightweight actors scale because most actors are inactive most of the time.
+//     - Message passing removes lock sharing, but protocol design still matters.
+//     - At-most-once delivery means failures and retries belong in the protocol or infrastructure.
+//   ],
+// )
+// #v(0.5em)
+// #warning-block(
+//   [Important boundary],
+//   [
+//     Actor isolation does not magically remove back-pressure, overload, or failure handling.
+//     It gives you a disciplined place to model them.
+//   ],
+// )
 
 = Typed API
 
-#slide(title: [Getting started with Pekko Typed])[
-  ```scala
-  scalaVersion := "3.3.3"
+== Getting started with Pekko Typed
+```scala
+val scala3Version = "3.7.4"
+val PekkoVersion = "1.4.0"
 
-  val pekkoVersion = "1.4.0"
+libraryDependencies ++= Seq(
+  "org.apache.pekko" %% "pekko-actor-typed" % PekkoVersion,
+  "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
+  "ch.qos.logback" % "logback-classic" % "1.5.32"
+  "org.apache.pekko" %% "pekko-actor-testkit-typed" % PekkoVersion % Test,
+  "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+)
+```
 
-  libraryDependencies ++= Seq(
-    "org.apache.pekko" %% "pekko-actor-typed" % pekkoVersion,
-    "org.apache.pekko" %% "pekko-actor-testkit-typed" % pekkoVersion % Test,
-    "ch.qos.logback" % "logback-classic" % "1.5.18",
-    "org.scalatest" %% "scalatest" % "3.2.19" % Test
-  )
-  ```
-  `org.apache.pekko` and `pekko-actor-typed` are the main migration targets from older Akka snippets.
+Code repository with examples:
+
+#fa-github() #h(0.3em) #link("https://github.com/nicolasfara/seminar-pcd-actor-pekko-code")
+
+== Core typed abstractions
+#components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
+  #feature-block([`Behavior[T]`], [
+    Describes how an actor handles one message of type `T`.
+  ])
+][
+  #feature-block([`ActorRef[T]`], [
+    Typed capability for sending messages in protocol `T`.
+  ])
+]
+#v(0.5em)
+#components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
+  #feature-block([`ActorSystem[T]`], [
+    Runtime root and entry point of the application.
+  ])
+][
+  #feature-block([`ActorContext[T]`], [
+    Logging, spawning, adapters, scheduling hooks, and services.
+  ])
 ]
 
-#slide(title: [Core typed abstractions])[
-  #components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
-    #feature-block([`Behavior[T]`], [
-      Describes how an actor handles one message of type `T`.
-    ])
-  ][
-    #feature-block([`ActorRef[T]`], [
-      Typed capability for sending messages in protocol `T`.
-    ])
-  ]
-  #v(0.5em)
-  #components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
-    #feature-block([`ActorSystem[T]`], [
-      Runtime root and entry point of the application.
-    ])
-  ][
-    #feature-block([`ActorContext[T]`], [
-      Logging, spawning, adapters, scheduling hooks, and services.
-    ])
-  ]
-]
+== `Behavior[T]`: the actor logic
+```scala
+object Counter:
+  enum Command:
+    case Tick
+
+  def apply(current: Int): Behavior[Command] =
+    Behaviors.receiveMessage:
+      case Command.Tick => Counter(current + 1)
+```
+
+#feature-block(
+  [Why it matters],
+  [
+    - A `Behavior[T]` is the definition of how one actor reacts to messages of type `T`.
+    - Returning a new behavior is how we model state changes in the functional style.
+    - `Behaviors.same`, `Behaviors.stopped`, and recursive behaviors are the common building blocks.
+  ],
+)
+
+== `ActorRef[T]`: the communication capability
+```scala
+object Counter:
+  enum Command:
+    case Tick
+    case Get(replyTo: ActorRef[Int])
+
+// somewhere else
+counterRef ! Counter.Command.Tick
+counterRef ! Counter.Command.Get(replyTo = probe.ref)
+```
+
+#note-block(
+  [What to remember],
+  [
+    - An `ActorRef[T]` is the only public handle you need to interact with an actor.
+    - The type parameter is the protocol: if a message is not in `T`, it cannot be sent.
+    - Passing references around is how actors discover collaborators and where to send replies.
+  ],
+)
+
+== `ActorSystem[T]`: the runtime root
+```scala
+@main def runCounter(): Unit =
+  val system = ActorSystem(Counter(0), "counter-system")
+  system ! Counter.Command.Tick
+```
+
+#feature-block(
+  [Operational role],
+  [
+    - `ActorSystem[T]` starts the top-level behavior and owns the runtime infrastructure.
+    - It manages dispatchers, scheduling, configuration, and the root guardians of the hierarchy.
+    - In practice, we usually create one actor system per application or bounded subsystem.
+  ],
+)
+
+== `ActorContext[T]`: the actor toolbox
+```scala
+def apply(): Behavior[Command] = Behaviors.setup: context =>
+  val worker = context.spawn(Worker(), "worker")
+  context.log.info("Worker started: {}", worker)
+  Behaviors.receiveMessage:
+    case Start =>
+      worker ! Worker.Command.Run
+      Behaviors.same
+```
+
+#feature-block(
+  [Common uses],
+  [
+    - `ActorContext[T]` gives access to services that only make sense from inside an actor.
+    - Typical operations are `spawn`, `watch`, logging, adapters, and scheduling-related helpers.
+    - Keep the context local to the actor: do not treat it as a dependency to pass everywhere.
+  ],
+)
 
 #slide(title: [Running example: protocol first], composer: (1fr, 1fr))[
   ```scala
@@ -360,14 +453,12 @@ An _Actor_ in Pekko always belongs to a *parent*.
       case Tick
       case Get(replyTo: ActorRef[Int])
 
-    def apply(current: Int): Behavior[Command] =
-      Behaviors.receive { (context, msg) =>
-        msg match
-          case Command.Tick => Counter(current + 1)
-          case Command.Get(replyTo) =>
-            replyTo ! current
-            Behaviors.same
-      }
+    def apply(current: Int): Behavior[Command] = Behaviors.receive: (context, msg) =>
+      msg match
+        case Command.Tick => Counter(current + 1)
+        case Command.Get(replyTo) =>
+          replyTo ! current
+          Behaviors.same
   ```
 ]
 
