@@ -480,6 +480,26 @@ class Counter(context: ActorContext[Command], var from: Int, val to: Int) extend
   ],
 )
 
+== Actor creation
+
+=== The root guardian
+Create the *root user guardian* with ```scala ActorSystem(behavior, "name")```:
+
+```scala
+ActorSystem(Behaviors.setup(new MyRoot(_)), "mysystem")
+```
+
+=== Child actors
+Create child actors with ```scala ActorContext[T].spawn(behavior, "name")```:
+
+```scala
+Behaviors.setup { context =>
+  val child = context.spawn(someBehavior(), "child")
+  context.log.info(s"Child created: $child")
+  Behaviors.empty[String]
+}
+```
+
 == Stopping patterns
 #components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
   #feature-block([Self-stopping], [
@@ -551,6 +571,74 @@ first stopped       // then parent stops
     preventing orphaned resources and simplifying resource management.
   ],
 )
+
+== Supervision
+
+#feature-block("Validation error vs failure")[
+  / Validation error: should be modeled as part of the protocol
+  / Failure: an unexpected exception that should be handled by the supervision strategy.
+  
+  "_Let it crash_" is the recommended approach: if an actor fails, it should be stopped and restarted in a clean state by #bold[its parent].
+]
+
+#warning-block("Default failure strategy")[
+  Actors are #bold[stopped by default] if an exception is thrown and #underline[no supervision strategy is defined.]
+]
+
+== Supervision essentials
+#feature-block(
+  [What it is],
+  [
+    Supervision lets a parent #bold[declaratively define] what to do when child actors fail with specific exceptions.
+  ],
+)
+
+#feature-block(
+  [Where to apply],
+  [
+    Wrap child behavior with `Behaviors.supervise(...)`, usually where the parent spawns the child.
+  ],
+)
+
+== Common supervision strategies
+```scala
+Behaviors.supervise(behavior)
+  .onFailure[IllegalStateException](SupervisorStrategy.restart)
+Behaviors.supervise(behavior)
+  .onFailure[IllegalStateException](SupervisorStrategy.resume)
+Behaviors.supervise(behavior)
+  .onFailure[IllegalStateException](
+    SupervisorStrategy.restart.withLimit(
+      maxNrOfRetries = 10,
+      withinTimeRange = 10.seconds,
+    )
+  )
+Behaviors.supervise(behavior)
+  .onFailure[IllegalStateException](SupervisorStrategy.restart)
+  .onFailure[IllegalArgumentException](SupervisorStrategy.stop)
+```
+
+== Restart semantics and wrapping
+#warning-block(
+  [Important note],
+  [
+    On restart, Pekko re-installs the #bold[original behavior] passed to `Behaviors.supervise`.
+    If mutable state is involved, create actors through `Behaviors.setup`.
+  ],
+)
+#v(0.5em)
+```scala
+def apply(): Behavior[Command] =
+  Behaviors.supervise(counter(1)).onFailure(SupervisorStrategy.restart)
+```
+#note-block(
+  [Wrapping behavior],
+  [
+    In functional style, applying supervision at the top-level is enough: returned behaviors are re-wrapped automatically.
+  ],
+)
+
+== Escalating failures
 
 = Basic Techniques
 
