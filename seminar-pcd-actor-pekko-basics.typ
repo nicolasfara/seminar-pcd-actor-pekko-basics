@@ -427,80 +427,130 @@ def apply(): Behavior[Command] = Behaviors.setup: context =>
   ],
 )
 
-#slide(title: [Running example: protocol first], composer: (1fr, 1fr))[
-  ```scala
-  object Counter:
-    enum Command:
-      case Tick
-      case Get(replyTo: ActorRef[Int])
-  ```
+== Functional Style
 
-  #feature-block(
-    [Why start from the protocol?],
-    [
-      - The protocol is the public API of the actor.
-      - Typed references make invalid messages unrepresentable.
-      - Reply channels are explicit through `replyTo`.
-      - Tests and collaborations are easier to reason about.
-    ],
-  )
+#feature-block("Actor as a function")[
+  An *actor* can be expressed as a #bold[function] that takes the current state and returns a behavior for the next message. This is the most common style in Pekko Typed, and it fits well with #underline[immutable state] and #underline[finite-state machines.]
 ]
 
-#slide(title: [Functional style])[
-  ```scala
-  object Counter:
-    enum Command:
-      case Tick
-      case Get(replyTo: ActorRef[Int])
+```scala
+object CounterActor:
+  enum Cmd:
+    case Tick
 
-    def apply(current: Int): Behavior[Command] = Behaviors.receive: (context, msg) =>
-      msg match
-        case Command.Tick => Counter(current + 1)
-        case Command.Get(replyTo) =>
-          replyTo ! current
-          Behaviors.same
-  ```
+  def apply(from: Int, to: Int): Behavior[Cmd] = Behaviors.receive: (_, message) =>
+    message match
+      case Tick if from < to => CounterActor(from + 1, to)
+      case _ => Behaviors.stopped
+```
+
+== Object-oriented style
+
+#feature-block("Actor as an object")[
+  For actors with complex mutable state, it can be more readable to use an object-oriented style and keep the state in mutable fields. This is a valid choice as long as the #bold[mutable state is properly encapsulated] and *not shared* outside the actor.
 ]
 
-#slide(title: [Object-oriented style and tradeoffs])[
-  ```scala
-  object CounterObject:
-    def apply(): Behavior[Counter.Command] =
-      Behaviors.setup(ctx => new CounterObject(ctx, 0))
+```scala
+class Counter(context: ActorContext[Command], var from: Int, val to: Int) extends
+  AbstractBehavior[Command](context):
+    def onMessage(msg: Command): Behavior[Command] = msg match
+      case Command.Tick if from < to =>
+        context.log.info(s"Counter: $from")
+        from += 1
+        this
+      case _ => Behaviors.stopped	
+```
 
-  final class CounterObject(
-      context: ActorContext[Counter.Command],
-      var current: Int,
-  ) extends AbstractBehavior[Counter.Command](context):
-    override def onMessage(msg: Counter.Command): Behavior[Counter.Command] = msg match
-      case Counter.Command.Tick => current += 1; this
-      case Counter.Command.Get(replyTo) => replyTo ! current; this
-  ```
-  Functional style fits immutable state and FSMs; OOP style is fine when local mutable state improves readability.
+= Actor Lifecycle
+
+== Actor creation and stopping
+#feature-block(
+  [Actor lifecycle basics],
+  [
+    - Actors are created when spawned: ```scala context.spawn(behavior, "name")```
+    - Actors are stopped when they return ```scala Behaviors.stopped```
+    - When a parent stops, #bold[all children are recursively stopped] before the parent's `PostStop` signal
+  ],
+)
+#v(0.5em)
+#warning-block(
+  [Resource cleanup],
+  [
+    This hierarchical stopping behavior #bold[greatly simplifies resource cleanup] and helps avoid resource leaks from open sockets, files, and other concurrent resources.
+  ],
+)
+
+== Stopping patterns
+#components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
+  #feature-block([Self-stopping], [
+    Return `Behaviors.stopped` when the actor is done or in response to a user-defined stop message. This is the recommended pattern.
+  ])
+][
+  #feature-block([Stopping children], [
+    Call `context.stop(childRef)` from the parent. You cannot stop arbitrary (non-child) actors this way.
+  ])
 ]
 
-#slide(title: [Lifecycle and supervision])[
-  #feature-block(
-    [Lifecycle],
-    [
-      - Root actor: `ActorSystem(behavior, "name")`
-      - Child creation: `context.spawn`
-      - Stop self: `Behaviors.stopped`
-      - Stop child: `context.stop(childRef)`
-      - Watch children: `context.watch`
-    ],
-  )
-  #v(0.5em)
-  #feature-block(
-    [Supervision],
-    [
-      - Typed actors stop by default on failure
-      - Wrap child behavior with `Behaviors.supervise(...)`
-      - Typical strategies: `restart`, `resume`, `restartWithBackoff`
-      - If you watch, handle `Terminated`
-    ],
-  )
-]
+== Lifecycle signals: PostStop
+#feature-block(
+  [```scala PostStop``` signal],
+  [
+    Sent just after the actor has been stopped. No messages are processed after this point, but cleanup logic can be run here.
+  ],
+)
+#v(0.5em)
+```scala
+override def onSignal: PartialFunction[Signal, Behavior[String]] =
+  case PostStop =>
+    context.log.info("Actor stopped, cleanup running")
+    this
+```
+#note-block(
+  [Strict ordering],
+  [
+    All ```scala PostStop``` signals of children are processed #bold[before] the ```scala PostStop``` signal of the parent.
+  ],
+)
+
+== Lifecycle example: parent and child
+#codly(
+  header: [`basics / io.github.nicolasfara.es00.basics.ActorLifecycleExample.scala`],
+  header-cell-args: (align: center, ),
+)
+```scala
+object StartStopActor:
+  def apply(): Behavior[String] = Behaviors.setup: context =>
+    context.log.info(s"Actor ${context.self} started")
+    val _ = context.spawn(ChildActor(), "child-actor")
+    Behaviors.receiveMessage[String]:
+      case "stop" => Behaviors.stopped
+      case _      => Behaviors.same
+object ChildActor:
+  def apply(): Behavior[String] = Behaviors.setup: context =>
+    context.log.info(s"Actor ${context.self} started")
+    Behaviors.receiveSignal:
+      case (ctx, PostStop) =>
+        context.log.info(s"Actor ${ctx.self} stopping")
+        Behaviors.same
+```
+
+== Lifecycle execution order
+When we send `"stop"` to the first actor:
+
+```
+first started       // first actor created
+second started      // child spawned
+second stopped      // child stops first
+first stopped       // then parent stops
+```
+
+#feature-block(
+  [Key insight],
+  [
+    The #bold[strict parent-child ordering] ensures that children always clean up before their parents,
+    preventing orphaned resources and simplifying resource management.
+  ],
+)
 
 = Basic Techniques
 
