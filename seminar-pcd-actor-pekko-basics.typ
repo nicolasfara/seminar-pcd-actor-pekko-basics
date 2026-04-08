@@ -640,27 +640,82 @@ def apply(): Behavior[Command] =
 
 == Escalating failures
 
+Given the parent-child hierarchy, if a child fails, the parent can *get notified*.
+
+#codly(
+  header: [`basics / io.github.nicolasfara.es00.basics.ParentFailureNotification.scala`],
+  header-cell-args: (align: center, ),
+)
+```scala
+object ParentActor:
+  def apply(): Behavior[String] = Behaviors.setup: ctx =>
+    ctx.watch(ctx.spawn(ChildFailingActor(), "child-actor"))
+    Behaviors.receiveSignal:
+      case (_, Terminated(ref)) =>
+        ctx.log.info(s"Child $ref has terminated")
+        Behaviors.stopped
+
+object ChildFailingActor:
+  def apply(): Behavior[String] = Behaviors.setup: _ =>
+    throw new RuntimeException("I failed")
+```
+
 = Basic Techniques
 
-#slide(title: [Interaction patterns])[
-  #feature-block(
-    [Patterns you will use constantly],
-    [
-      - Fire-and-forget: `ref ! msg`
-      - Request-response: include `replyTo: ActorRef[Res]` in the command
-      - Ask pattern: bridge request-response to a future when integrating with non-actor code
-      - `pipeToSelf`: translate async completion back into an internal message
-    ],
-  )
-  #v(0.5em)
-  ```scala
-  case class Fetch(id: String, replyTo: ActorRef[Result]) extends Command
+== Fire and forget
 
-  context.ask(worker, Worker.Fetch(id, _)) {
-    case Success(value) => WrappedResult(value)
-    case Failure(err) => WorkerFailed(err)
+#feature-block("Fire and forget")[
+  Pekko's core API is designed for *fire-and-forget* message sending, which is the most common interaction pattern.
+  You can send messages to an actor without expecting a reply, and the actor will process them #bold[asynchronously].
+]
+
+- Pekko delivery guarantee: *at-most-once* delivery, which means that messages may be lost but will not be duplicated.
+- Pekko ordering guarantee: message ordering is guaranteed *per sender-receiver* pair, but not across the whole system.
+
+== Request-response
+#feature-block("Request-response")[
+  For interactions that require a reply, the common pattern is to include an `ActorRef` in the message for the reply to be sent to.
+
+  ```scala
+  enum Protocol:
+    case Request(data: String, replyTo: ActorRef[Response])
+    case Response(result: String)
+  ```
+
+  This way, the sender can provide a reference for where the response should be sent, and the receiver can reply directly to that reference.
+]
+
+== Request-response with ask
+
+#slide(title: [Request-response with ask], composer: (1.2fr, 1fr))[
+  #codly(
+    header: [`basics / io.github.nicolasfara.es00.basics.AskOperator.scala`],
+    header-cell-args: (align: center, ),
+  )
+  ```scala
+  given Timeout = 3.seconds
+
+  val greeting: Future[GreeterActor.Greeting] = target ? { replyTo =>
+    GreeterActor.Command.Greet("Pekko", replyTo)
   }
   ```
+
+  #feature-block(
+    [When `ask` is useful],
+    [
+      - Bridge actor messages to `Future`-based APIs.
+      - Request one reply with a clear timeout boundary.
+      - Keep protocol explicit: the request still carries a typed `replyTo`.
+    ],
+  )
+
+  // #warning-block(
+  //   [Use sparingly],
+  //   [
+  //     `ask` creates extra machinery (temporary actor + timeout handling).
+  //     Prefer direct message-driven protocols for internal actor-to-actor collaboration.
+  //   ],
+  // )
 ]
 
 #slide(title: [Timers and per-session actors], composer: (1fr, 1fr))[
