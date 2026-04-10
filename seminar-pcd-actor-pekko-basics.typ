@@ -718,24 +718,12 @@ object ChildFailingActor:
   // )
 ]
 
-#slide(title: [Timers and per-session actors], composer: (1fr, 1fr))[
-  ```scala
-  Behaviors.withTimers[Command] { timers =>
-    timers.startSingleTimer(Remind, 300.millis)
-    Behaviors.receiveMessage {
-      case Remind => Behaviors.same
-      case Stop => Behaviors.stopped
-    }
-  }
-  ```
+== Stash
 
-  #feature-block(
-    [Per-session child actor],
-    [
-      For a complex request, spawn a short-lived child that gathers replies, enforces a timeout, and sends one final answer.
-    ],
-  )
-]
+*Stashing* enables an actor to #bold[temporarily buffer messages] that cannot be processed in the current state, and then process them later when the state changes.
+
+- If the actor needs to initialize some state or create some resources before it can handle certain messages, it can stash those messages until it's ready.
+- When the actor needs to wait for an external result (e.g., a response from another actor or a future), it can stash incoming messages until the result is available.
 
 #slide(title: [Stash and FSM modeling])[
   #components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
@@ -748,56 +736,61 @@ object ChildFailingActor:
     ])
   ]
   #v(0.5em)
+  #codly(
+    header: [`basics / io.github.nicolasfara.es00.basics.Stashing.scala`],
+    header-cell-args: (align: center, ),
+  )
   ```scala
-  Behaviors.withStash(100) { buffer =>
-    Behaviors.setup[Command] { ctx =>
-      loading(ctx, buffer)
-    }
-  }
+  object Stashing:
+    // Command protocol ...
+    def apply(id: UUID, db: DB): Behavior[Command] = Behaviors.withStash(100): buff =>
+      Behaviors.setup(context => new Stashing(context, buff, id, db).start())
   ```
 ]
 
-#slide(title: [Blocking, dispatchers, and discovery])[
-  #warning-block(
-    [Do not block the default dispatcher],
-    [
-      Blocking inside a message handler starves unrelated actors that share the same threads.
-      Wrapping blocking code in a future is not enough if that future still uses the actor dispatcher.
-    ],
-  )
-  #v(0.4em)
-  ```scala
-  val blockingEc =
-    context.system.dispatchers.lookup(
-      DispatcherSelector.fromConfig("my-blocking-dispatcher")
-    )
-  ```
-  #v(0.4em)
-  `Receptionist` discovery is the standard way to register a `ServiceKey` and look up peers dynamically.
-]
+// #slide(title: [Blocking, dispatchers, and discovery])[
+//   #warning-block(
+//     [Do not block the default dispatcher],
+//     [
+//       Blocking inside a message handler starves unrelated actors that share the same threads.
+//       Wrapping blocking code in a future is not enough if that future still uses the actor dispatcher.
+//     ],
+//   )
+//   #v(0.4em)
+//   ```scala
+//   val blockingEc =
+//     context.system.dispatchers.lookup(
+//       DispatcherSelector.fromConfig("my-blocking-dispatcher")
+//     )
+//   ```
+// ]
 
 = Testing
 
-#slide(title: [Testing strategy])[
+#slide(title: [Testing typed actors])[
   #components.side-by-side(columns: (1fr, 1fr), gutter: 12pt)[
-    #feature-block([`BehaviorTestKit`], [
-      - Synchronous
-      - Great for pure behavior logic
-      - Inspect effects such as spawn, watch, and logs
-      - Fast and deterministic
+    #feature-block([Prefer `BehaviorTestKit` when], [
+      - The behavior itself is the unit under test
+      - You want deterministic, synchronous execution
+      - You need to inspect effects such as spawn, watch, and logs
     ])
   ][
-    #feature-block([`ActorTestKit`], [
-      - Runs real actors in a real actor system
-      - Better for interactions, timing, and protocol wiring
-      - Uses probes as queryable mailboxes
+    #feature-block([Prefer `ActorTestKit` when], [
+      - Actors collaborate inside a real actor system
+      - Timing, scheduling, or protocol wiring matter
+      - Test probes should observe replies like controlled mailboxes
     ])
   ]
   #v(0.5em)
-  Start with `BehaviorTestKit`; switch to `ActorTestKit` when collaboration is the real subject of the test.
+  #note-block(
+    [Rule of thumb],
+    [
+      Start with `BehaviorTestKit`; move to `ActorTestKit` when interaction between actors is the real subject of the test.
+    ],
+  )
 ]
 
-#slide(title: [Synchronous test example])[
+#slide(title: [Synchronous test with `BehaviorTestKit`], composer: (1.2fr, 1fr))[
   ```scala
   import org.apache.pekko.actor.testkit.typed.scaladsl.{BehaviorTestKit, TestInbox}
 
@@ -806,21 +799,20 @@ object ChildFailingActor:
 
   testKit.run(Counter.Command.Tick)
   testKit.run(Counter.Command.Get(inbox.ref))
-
   inbox.expectMessage(1)
   ```
 
   #feature-block(
-    [What this buys you],
+    [Why this style is useful],
     [
-      - No scheduler races
-      - Easy inspection of outgoing messages
-      - Good coverage for protocol and state transition logic
+      - No scheduler races or timing concerns
+      - Outgoing messages are easy to inspect
+      - State transitions and protocol logic stay cheap to test
     ],
   )
 ]
 
-#slide(title: [Asynchronous test example])[
+#slide(title: [Asynchronous test with `ActorTestKit`], composer: (1.2fr, 1fr))[
   ```scala
   import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
   import org.scalatest.wordspec.AnyWordSpecLike
@@ -837,7 +829,15 @@ object ChildFailingActor:
       }
     }
   ```
-  A test probe is a mailbox you can assert against, which makes it ideal for reply-oriented protocols.
+
+  #feature-block(
+    [Why probes matter],
+    [
+      - A probe is a mailbox you can assert against
+      - Ideal for reply-oriented protocols
+      - Useful when behavior depends on real actor interaction
+    ],
+  )
 ]
 
 = Wrap-up
