@@ -6,6 +6,11 @@
 #import "@preview/codly-languages:0.1.1": *
 #import "utils.typ": *
 
+#let small-code(body) = {
+  show raw: set text(size: 0.82em, font: "JetBrains Mono")
+  body
+}
+
 #show: codly-init.with()
 #codly(
   languages: codly-languages,
@@ -60,7 +65,6 @@
     }
   )
 )
-
 #title-slide()
 
 #slide(title: [Agenda])[
@@ -74,101 +78,123 @@
   )
 ]
 
+
 = Pekko Remote Artery
 
-== Artery Remoting
+== Artery Overview
 
-#feature-block("Supersedes Classic Remoting")[
-  (Artery) Remoting is the support by which actor systems on different nodes can
-  talk to each other in a peer-to-peer fashion.
+#feature-block("What Artery is")[
+  Artery is the remoting subsystem by which actor systems on different nodes talk to each other.
+  It replaced classic remoting and keeps the actor API location-transparent.
 ]
 
 #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #note-block("Location transparency")[
-    No API difference between local or remote systems. `ActorRef`s to remote actors look exactly like those to local actors.
+  #note-block("Recommended usage")[
+    In practice, prefer Pekko Cluster, or higher-level protocols such as HTTP and gRPC, instead of using remoting directly.
   ]
 ][
-  #note-block("Serialization")[
-    For interaction across a network, messages must be de/serialisable.
+  #note-block("Peer-to-peer")[
+    Remoting is not server-client: any remoting-enabled system can connect to any other one if it knows the target `ActorRef`.
   ]
 ]
 
-#v(0.5em)
+// #note-block("ByteBuffer-based serializers")[
+//   Artery also supports `ByteBufferSerializer`, which can reduce allocations and improve throughput for high-volume messaging.
+// ]
+== Selecting a Transport
 
-#warning-block("Not meant to be used directly!")[
-  Use higher-level modules like #bold[Pekko Cluster] utilities or technology-agnostic protocols
-  such as HTTP and gRPC (cf. Pekko HTTP and Pekko gRPC).
+#feature-block("Three transport choices")[
+  - `tcp`: default and simplest choice
+  - `tls-tcp`: TCP with encryption
+  - `aeron-udp`: high throughput and low latency, but more operationally demanding
+]
+
+#note-block("Practical guidance")[
+  Use `tcp` unless you need TLS or Aeron-specific performance. Switching transport later is not a rolling update.
 ]
 
 == Configuration
 
 We can configure Artery Remoting in `application.conf`:
 
+#small-code[
 #codly(
   header: [`application.conf`],
   header-cell-args: (align: center, ),
 )
 ```hocon
-pekko {
-  actor {
-    provider = remote // local or remote or cluster
-    serialization-bindings {
-      "it.unibo.pcd.pekko.Message" = jackson-cbor // serialization binding
-    }
-  }
-  remote { // remote configuration
-    artery {
-      transport = tcp # aeron-udp, tls-tcp
-      canonical.hostname = "127.0.0.1" // in real deployments, external IP
-      canonical.port = 25520
-    }
-  }
+pekko.actor.provider = cluster
+pekko.remote.artery {
+  transport = tcp
+  canonical.hostname = "127.0.0.1"
+  canonical.port = 25520
 }
 ```
+]
+
+#note-block("Canonical address")[
+  The canonical host and port are the globally reachable address that other systems use to connect back.
+  In NAT, Docker, or Kubernetes setups, separate the external canonical address from the local bind address. See the #link("https://pekko.apache.org/docs/pekko/1.3/remoting-artery.html#remote-configuration-nat-artery", "documentation") for details.
+]
 
 == Acquiring references to remote actors
 
-You can use a remote `ActorRef` exactly as a local one (i.e, `ref ! msg`) ... \
-... But you need to obtain the `ActorRef` first!
+In order to communicate with an actor, it is necessary to have its ```scala ActorRef```.
+Locally, this is usually obtained by the actor creator (`actorOf()` caller), then shared with others.
 
-#feature-block("Two potential ways:")[
-  - *Passing an `ActorRef` in a message*: An actor on node A sends its `ActorRef` to an actor on node B.
-  - *Receptionist*: In Pekko Typed, the `Receptionist` can be used for registering and discovering `ActorRef`s across the cluster.
+#feature-block("How to get a remote ActorRef")[
+  - Receive it in a message (`sender()` or payload, e.g. `PleaseReply(..., remoteActorRef: ActorRef)`).
+  - Or look up a known path with `ActorSelection`.
 ]
 
-#note-block("Legacy Note")[
-  In Pekko/Akka Classic, this was supported through `actorSelection` (retrieving an `ActorRef` from a URL like `pekko://sys@host:port/user/actor`). In Typed, the `Receptionist` is the preferred mechanism.
+#feature-block("Remoting-enabled methods")[
+  - *Remote lookup:* `actorSelection(path)`
+  - *Remote creation:* `actorOf(Props(...), actorName)`
 ]
+
+// #note-block("Legacy Note")[
+//   In Pekko/Akka Classic, this was supported through `actorSelection` (retrieving an `ActorRef` from a URL like `pekko://sys@host:port/user/actor`). In Typed, the `Receptionist` is the preferred mechanism.
+// ]
 
 == Serialization
 
 In order to send messages to remote peers, you should devise your serialization policy.
 
+#small-code[
 #codly(
   header: [`application.conf`],
   header-cell-args: (align: center, ),
 )
 ```hocon
-pekko {
-  actor {
-    provider = remote // local or remote or cluster
-    serializers { // key value map to associate name to serializers
-      // Defaults..
-      jackson-json = "org.apache.pekko.serialization.jackson.JacksonJsonSerializer"
-      jackson-cbor = "org.apache.pekko.serialization.jackson.JacksonCborSerializer"
-      proto = "org.apache.pekko.remote.serialization.ProtobufSerializer"
-    }
-    serialization-bindings { // map to link root message interface to serializer
-      "it.unibo.pcd.pekko.Message" = jackson-cbor
-    }
-  }
+pekko.actor.provider = remote
+pekko.actor.serialization-bindings {
+  "it.unibo.pcd.pekko.Message" = jackson-cbor
 }
 ```
+
+Built-in serializers include `jackson-json`, `jackson-cbor`, and `proto`.
 
 Include the dependency on your serialisers:
 ```scala
 libraryDependencies += "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion
 ```
+]
+
+== Remote Security
+
+#feature-block("Protect remoting")[
+  - Prefer `tls-tcp` when messages must be encrypted
+  - Use mutual authentication between peers
+  - Do not expose Artery directly on an untrusted network
+]
+
+#warning-block("Untrusted mode")[
+  `pekko.remote.artery.untrusted-mode = on` blocks remote deployment, remote DeathWatch, system-stop style messages, and messages marked `PossiblyHarmful`.
+]
+
+#note-block("Trusted selection paths")[
+  If you need limited actor-selection access, allow only specific paths with `pekko.remote.artery.trusted-selection-paths`.
+]
 
 == Delivery guarantees, remote watch, and quarantine
 
@@ -191,40 +217,84 @@ Artery uses TCP or Aeron as a "reliable" underlying message transport.
 
 = Pekko Clustering
 
-== Pekko Cluster Specification (1/2)
+== Cluster Overview
 
-#feature-block("Overview")[
-  Pekko Cluster provides a #bold[fault-tolerant decentralized peer-to-peer based Cluster Membership Service] with no single point of failure or single point of bottleneck. It does this using gossip protocols and an automatic failure detector.
+#feature-block("What Pekko Cluster gives you")[
+  Pekko Cluster is a decentralized, peer-to-peer membership service for actor systems spread across multiple nodes.
+  There is no single coordinator or single bottleneck: cluster state is disseminated with gossip and monitored by a failure detector.
 ]
 
-#feature-block("Motivation")[
-  Pekko Cluster allows for building distributed applications, where one application or service spans multiple nodes (in practice multiple `ActorSystem`s).
-]
-
-/ node: logical member of cluster, identified by `hostname:port:uid` (there could be multiple nodes on the same physical machine)
-/ cluster: set of nodes joined together through Cluster Membership Service
-/ leader: cluster node that manages cluster convergence and membership state transitions
-
-== Pekko Cluster Specification (2/2)
-
-#components.side-by-side(columns: (1.5fr, 1fr), gutter: 1em)[
-  #feature-block("Cluster membership: how it works")[
-    - #bold[Vector clocks] are used to reconcile and merge differences in cluster state during gossiping.
-    - #bold[Convergence]: when all nodes are in the seen set for current cluster state.
-    - Note: convergence cannot occur when some node is unreachable.
-    - A #bold[Split Brain Resolver] deals with partitions; can be configured with downing strategies.
-    - A #bold[failure detector] is what tries to detect if a node is un/reachable.
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #note-block("Why it matters")[
+    Build one application or service across many nodes while keeping the actor model and location transparency.
   ]
 ][
-  #note-block("Gossip Protocol")[
-    Nodes exchange state information to ensure eventually consistent membership across the cluster.
+  #note-block("Main ingredients")[
+    Membership state, gossip dissemination, automatic failure detection, and deterministic leadership for convergence.
+  ]
+]
+
+== Cluster Vocabulary
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Node")[
+    A logical cluster member identified by a `hostname:port:uid` tuple. Multiple nodes can live on the same machine.
+  ]
+
+  #feature-block("Cluster")[
+    The set of nodes joined together through the Cluster Membership Service.
+  ]
+][
+  #feature-block("Leader")[
+    A role, not a permanently elected machine. When gossip has converged, the leader manages membership transitions.
+  ]
+
+  #feature-block("Reachability")[
+    `reachable` and `unreachable` are cluster states inferred by the failure detector and propagated by gossip.
+  ]
+]
+
+== Gossip, Convergence, and Failure Detection
+
+#feature-block("How membership state is shared")[
+  Cluster state is spread with a gossip protocol. Each state update carries a vector clock, which helps reconcile and merge concurrent changes.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #note-block("Convergence")[
+    Gossip converges when every node is in the seen set for the current state version.
+    Convergence cannot be reached while some node is `unreachable`.
+  ]
+][
+  #note-block("Failure detector")[
+    A Phi Accrual Failure Detector monitors nodes by heartbeat and marks them `unreachable` or `reachable` again.
+  ]
+]
+
+#warning-block("Partition handling")[
+  If a system message cannot be delivered, the destination can be quarantined.
+  In practice the cluster must down or remove the node, and the quarantined actor system must be restarted before joining again.
+]
+
+== Leader and Seed Nodes
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Leader responsibilities")[
+    - Promote `joining` members to `up`
+    - Move `exiting` members to `removed`
+    - Act only after gossip convergence
+  ]
+][
+  #feature-block("Seed nodes")[
+    - Contact points for new nodes joining the cluster
+    - Useful for bootstrapping, but not required for steady-state operation
+    - A new member can join through any current member, not just a seed node
   ]
 ]
 
 == Pekko Cluster: basic usage (1/2)
 
 ```scala
-val PekkoVersion = "1.0.2"
 libraryDependencies ++= Seq(
   "org.apache.pekko" %% "pekko-cluster-typed" % PekkoVersion,
   "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion
@@ -246,26 +316,21 @@ val cluster = Cluster(system)
 
 == Pekko Cluster: basic usage (2/2)
 
+#small-code[
 #codly(
   header: [`application.conf`],
   header-cell-args: (align: center, ),
 )
 ```hocon
-pekko {
-  actor.provider = "cluster"
-  remote.artery.canonical {
-    hostname = "127.0.0.1"
-    port = 2551
-  }
-  cluster {
-    seed-nodes = [
-      "pekko://ClusterSystem@127.0.0.1:2551",
-      "pekko://ClusterSystem@127.0.0.1:2552"
-    ]
-    downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
-  }
-}
+pekko.actor.provider = "cluster"
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2551
+pekko.cluster.seed-nodes = [
+  "pekko://ClusterSystem@127.0.0.1:2551",
+  "pekko://ClusterSystem@127.0.0.1:2552"
+]
 ```
+]
 
 == Cluster Membership: Joining
 
@@ -328,9 +393,7 @@ For the own node, `cluster.selfMember.hasRole(r)`.
 val selfMember = Cluster(context.system).selfMember
 if (selfMember.hasRole("backend")) {
   context.spawn(Backend(), "back")
-} else {
-  // spawn frontend or other roles
-}
+} else { /* spawn frontend or other roles */ }
 ```
 
 == Pekko Cluster facilities
