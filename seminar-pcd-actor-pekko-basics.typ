@@ -119,7 +119,7 @@
 
 #uncover("2")[
   #feature-block("Designing with those in mind")[
-    These problems occurs regularly in distributed systems, so we need to design with them in mind.
+    These problems occur regularly in distributed systems, so we need to design with them in mind.
   ]
 ]
 
@@ -171,7 +171,7 @@ Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apach
   ```scala Pekko Classic``` legacy API, still supported but not recommended for new code
 ]
 
-== Core modules and ecosystem
+== Core modules
 
 ```scala
 "org.apache.pekko" %% "pekko-actor-typed" % PekkoVersion
@@ -179,34 +179,36 @@ Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apach
 Provides basic support for typed actors and actor systems.
 
 ```scala
+"org.apache.pekko" %% "pekko-stream" % PekkoVersion
+```
+Streams provide a higher-level abstraction on top of actors that simplifies writing such processing networks, handling all the fine details in the background and providing a safe, typed, composable programming model.
+
+```scala
 "org.apache.pekko" %% "pekko-remote" % PekkoVersion
 ```
 Remoting enables actors that live on different computers to seamlessly exchange messages. While distributed as a JAR artifact, Remoting resembles a module more than it does a library.
 
+== Cluster and advanced modules
+
 ```scala
 "org.apache.pekko" %% "pekko-cluster-typed" % PekkoVersion
 ```
-Clustering gives you the ability to organize these into a “meta-system” tied together by a membership protocol
+Clustering gives you the ability to organize these into a "meta-system" tied together by a membership protocol.
 
 ```scala
 "org.apache.pekko" %% "pekko-cluster-sharding-typed" % PekkoVersion
 ```
-Sharding is a pattern that mostly used together with Persistence to balance a large set of persistent entities
+Sharding is a pattern that is mostly used together with Persistence to balance a large set of persistent entities.
 
 ```scala
 "org.apache.pekko" %% "pekko-cluster-singleton" % PekkoVersion
 ```
-While this undeniably introduces a common bottleneck for the whole cluster that limits scaling, there are scenarios where the use of this pattern is unavoidable
+Provides a mechanism to ensure only a single instance of a given actor runs across the cluster. While it introduces a common bottleneck, there are scenarios where its use is unavoidable.
 
 ```scala
 "org.apache.pekko" %% "pekko-persistence-typed" % PekkoVersion
 ```
 Persistence provides patterns to enable actors to persist events that lead to their current state.
-
-```scala
-"org.apache.pekko" %% "pekko-stream" % PekkoVersion
-```
-Streams provide a higher-level abstraction on top of actors that simplifies writing such processing networks, handling all the fine details in the background and providing a safe, typed, composable programming model.
 
 = Actor Foundations
 
@@ -214,9 +216,9 @@ Streams provide a higher-level abstraction on top of actors that simplifies writ
 
 *Actors* are entities that #bold[encapsulate] #underline[state] and #underline[behavior] and interact solely through *asynchronous message passing*.
 
-/ Behavior: upon message arrival, and actor can:
-  - Sends a finite number of messages to other actors
-  - Creates a finite number of child actors
+/ Behavior: upon message arrival, an actor can:
+  - Send a finite number of messages to other actors
+  - Create a finite number of child actors
   - (must) Specify the next behavior to handle the next message
 
 / Encapsulation: An actor is exposed to the outside through the ```scala ActorRef[T]```
@@ -269,14 +271,14 @@ An *Actor System* is a hierarchical group of actors which share common configura
 
 - Splitting problems into smaller pieces
 - Handling failures
-- *Supervision model* (ispired by Erlang's "let it crash" philosophy)
+- *Supervision model* (inspired by Erlang's "let it crash" philosophy)
 
 == Actor systems, refs, and paths
 #feature-block(
   [Three ideas to keep],
   [
     - `ActorSystem[T]` is the runtime root: create it once per logical application boundary.
-    - Actors live in a #bold[hierarchy], with user actors supervised 
+    - Actors live in a #bold[hierarchy], with user actors supervised by the user guardian.
     - `ActorRef[T]` is the typed capability you share to let others send protocol messages.
   ],
 )
@@ -319,7 +321,7 @@ val PekkoVersion = "1.4.0"
 libraryDependencies ++= Seq(
   "org.apache.pekko" %% "pekko-actor-typed" % PekkoVersion,
   "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
-  "ch.qos.logback" % "logback-classic" % "1.5.32"
+  "ch.qos.logback" % "logback-classic" % "1.5.32",
   "org.apache.pekko" %% "pekko-actor-testkit-typed" % PekkoVersion % Test,
   "org.scalatest" %% "scalatest" % "3.2.20" % Test,
 )

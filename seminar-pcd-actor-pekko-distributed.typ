@@ -110,7 +110,7 @@
 ]
 
 #note-block("Practical guidance")[
-  Use `tcp` unless you need TLS or Aeron-specific performance. Switching transport later is not a rolling update.
+  Use `tcp` unless you need TLS or Aeron-specific performance. Switching the transport protocol later is not a rolling update.
 ]
 
 == Configuration
@@ -158,7 +158,7 @@ Locally, this is usually obtained by the actor creator (`actorOf()` caller), the
 
 == Serialization
 
-In order to send messages to remote peers, you should devise your serialization policy.
+In order to send messages to remote peers, you must devise your serialization policy.
 
 #small-code[
 #codly(
@@ -174,7 +174,7 @@ pekko.actor.serialization-bindings {
 
 Built-in serializers include `jackson-json`, `jackson-cbor`, and `proto`.
 
-Include the dependency on your serialisers:
+Include the dependency on your serializers:
 ```scala
 libraryDependencies += "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion
 ```
@@ -202,7 +202,7 @@ Pekko guarantees: (1) #bold[at-most-once delivery]; and (2) #bold[message orderi
 Artery uses TCP or Aeron as a "reliable" underlying message transport.
 
 #warning-block("Cases when messages may not be delivered")[
-  - During a network partition (TCP connection / Aeron session broke)
+  - During a network partition (TCP connection / Aeron session broken)
   - When sending too many messages without flow control (filling outbound queue)
   - On de/serialization failure
   - Exception in the remoting infrastructure
@@ -301,7 +301,7 @@ libraryDependencies ++= Seq(
 )
 ```
 
-The Cluster extension gives you access to management tasks such as Joining, Leaving and Downing and subscription of cluster membership events such as `MemberUp`, `MemberRemoved` and `UnreachableMember`.
+The Cluster extension gives you access to management tasks such as Joining, Leaving and Downing and subscription of cluster membership events such as `MemberUp`, `MemberRemoved`, and `UnreachableMember`.
 
 ```scala
 // Access the Cluster extension on a node
@@ -422,7 +422,7 @@ if (selfMember.hasRole("backend")) {
 == Acknowledgement
 
 #feature-block("Acknowledgement")[
-  The material and the slides are derived from Roberto Casadei works and from the
+  The material and the slides are derived from Roberto Casadei's works and from the
   Concurrent and Distributed Programming course by Gianluca Aguzzi.
 
   Originally focused on Akka, these slides have been adapted to present the modern
