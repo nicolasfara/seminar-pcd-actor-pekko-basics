@@ -509,7 +509,7 @@ Behaviors.setup { context =>
   ])
 ][
   #feature-block([Stopping children], [
-    Call `context.stop(childRef)` from the parent. You cannot stop arbitrary (non-child) actors this way.
+    Call `context.stop(childRef)` from the parent. You cannot stop arbitrary actors this way.
   ])
 ]
 
