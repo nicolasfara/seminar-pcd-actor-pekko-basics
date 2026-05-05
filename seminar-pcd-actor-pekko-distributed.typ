@@ -71,6 +71,7 @@
   #feature-block(
     [Today's Topics],
     [
+      - *Cluster Concepts*: Membership, gossip convergence, and failure detection
       - *Pekko Remote Artery*: Location transparency, configuration, and serialization
       - *Pekko Clustering*: Cluster membership, gossiping, and failure detection
       - *Advanced Facilities*: Receptionist, Group Router, Distributed Data, and Sharding
@@ -79,13 +80,86 @@
 ]
 
 
+= Cluster Concepts
+
+== Distributed Membership
+
+#feature-block("What Pekko Cluster models")[
+  Pekko Cluster lets one application span several actor systems, each running as a logical #bold[node].
+  A node is identified by `hostname:port:uid`, so several nodes may even run on the same physical machine.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #note-block("Decentralized")[
+    Membership is peer-to-peer: no permanent master, no central registry, and no single bottleneck for cluster state.
+  ]
+][
+  #note-block("What is tracked")[
+    The cluster tracks members, their lifecycle state, and whether each member is currently `reachable` or `unreachable`.
+  ]
+]
+
+== Gossip and Convergence
+
+#feature-block("How nodes agree")[
+  Cluster state is disseminated by *gossip*#footnote("https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"): nodes periodically exchange their view of membership with other nodes, preferring peers that have not seen the latest state.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #note-block("Vector clocks")[
+    Each state update carries version information, allowing nodes to detect older, newer, or conflicting membership views and #underline[merge them].
+  ]
+][
+  #note-block("Seen set")[
+    A state is *converged* when #bold[every reachable node has observed the current version].
+    Until convergence, membership transitions wait.
+  ]
+]
+
+== Failure Detection
+
+#feature-block("Failure is suspicion, not certainty")[
+  Pekko uses a #link("https://pekko.apache.org/docs/pekko/current/typed/failure-detector.html", "Phi Accrual Failure Detector"): heartbeat timing is interpreted as a suspicion level, which can be tuned for the deployment environment.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #note-block("Spread by gossip")[
+    When one monitor marks a node `unreachable`, that information is propagated through the cluster.
+    The node may later become `reachable` again.
+  ]
+][
+  #warning-block("Operational consequence")[
+    Gossip convergence cannot complete while members are unreachable.
+    They must recover, or be downed and removed, before the leader can advance membership.
+  ]
+]
+
+== Leader and Joining
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Leader")[
+    The leader is a deterministic role recognized after convergence, not a long-running elected process.
+    It promotes `joining` nodes to `up` and completes removals.
+  ]
+][
+  #feature-block("Seed nodes")[
+    Seed nodes are only contact points for new members.
+    Once the cluster is running, membership does not depend on seed nodes as special coordinators.
+  ]
+]
+
+#note-block("Why this comes before Artery")[
+  Cluster gives the distributed actor system its membership semantics.
+  Artery is the remoting transport that lets those actor systems communicate.
+]
+
 = Pekko Remote Artery
 
 == Artery Overview
 
 #feature-block("What Artery is")[
-  Artery is the remoting subsystem by which actor systems on different nodes talk to each other.
-  It replaced classic remoting and keeps the actor API location-transparent.
+  *Artery* is the remoting subsystem by which actor systems on different nodes #bold[talk to each other].
+  It replaced classic remoting and keeps the actor API *location-transparent*.
 ]
 
 #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
@@ -137,24 +211,45 @@ pekko.remote.artery {
   In NAT, Docker, or Kubernetes setups, separate the external canonical address from the local bind address. See the #link("https://pekko.apache.org/docs/pekko/1.3/remoting-artery.html#remote-configuration-nat-artery", "documentation") for details.
 ]
 
-== Acquiring references to remote actors
+// == Acquiring references to remote actors
 
-In order to communicate with an actor, it is necessary to have its ```scala ActorRef```.
-Locally, this is usually obtained by the actor creator (`actorOf()` caller), then shared with others.
+// In order to communicate with an actor, it is necessary to have its ```scala ActorRef```.
+// Locally, this is usually obtained by the actor creator (`actorOf()` caller), then shared with others.
 
-#feature-block("How to get a remote ActorRef")[
-  - Receive it in a message (`sender()` or payload, e.g. `PleaseReply(..., remoteActorRef: ActorRef)`).
-  - Or look up a known path with `ActorSelection`.
-]
+// #feature-block("How to get a remote ActorRef")[
+//   - Receive it in a message (`sender()` or payload, e.g. `PleaseReply(..., remoteActorRef: ActorRef)`).
+//   - Or look up a known path with `ActorSelection`.
+// ]
 
-#feature-block("Remoting-enabled methods")[
-  - *Remote lookup:* `actorSelection(path)`
-  - *Remote creation:* `actorOf(Props(...), actorName)`
-]
+// #feature-block("Remoting-enabled methods")[
+//   - *Remote lookup:* `actorSelection(path)`
+//   - *Remote creation:* `actorOf(Props(...), actorName)`
+// ]
 
 // #note-block("Legacy Note")[
 //   In Pekko/Akka Classic, this was supported through `actorSelection` (retrieving an `ActorRef` from a URL like `pekko://sys@host:port/user/actor`). In Typed, the `Receptionist` is the preferred mechanism.
 // ]
+
+== Joining a cluster programmatically
+
+To #bold[join] a cluster programmatically, send a `Join` message to the Cluster Manager:
+#codly(
+  header: [`cluster / io.github.nicolasfara.es01.cluster.joining.ManualJoin.scala`],
+  header-cell-args: (align: center, ),
+)
+```scala
+val clusterSystem1 = Cluster(system1)
+clusterSystem1.manager ! Join(clusterSystem1.selfMember.address)
+// Other config
+val clusterSystem2 = Cluster(system2)
+clusterSystem2.manager ! Join(clusterSystem1.selfMember.address)
+```
+
+To #bold[leave] the cluster, send a `Leave` message:
+```scala
+clusterSystem1.manager ! Leave(clusterSystem1.selfMember.address)
+```
+
 
 == Serialization
 
@@ -434,5 +529,6 @@ if (selfMember.hasRole("backend")) {
 #feature-block("References")[
   - Apache Pekko Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apache.org/docs/]
   - Pekko Remoting: #link("https://pekko.apache.org/docs/pekko/current/remoting-artery.html")[remoting-artery.html]
+  - Pekko Cluster Specification: #link("https://pekko.apache.org/docs/pekko/current/typed/cluster-concepts.html")[typed/cluster-concepts.html]
   - Pekko Cluster: #link("https://pekko.apache.org/docs/pekko/current/typed/cluster.html")[typed/cluster.html]
 ]
