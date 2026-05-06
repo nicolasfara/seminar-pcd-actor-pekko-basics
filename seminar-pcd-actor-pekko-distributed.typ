@@ -250,10 +250,208 @@ To #bold[leave] the cluster, send a `Leave` message:
 clusterSystem1.manager ! Leave(clusterSystem1.selfMember.address)
 ```
 
+== Acquiring references to remote actors
+
+To communicate with (remote) actors, you need their `ActorRef`. You can get it by:
+
+#components.side-by-side[
+  #feature-block("In a message")[
+    Include the `ActorRef` in the message payload, e.g. `Reply(..., ref: ActorRef[T])`.
+    But the first message?
+  ]
+][
+  #feature-block("Via actor selection")[
+    Use `actorSelection(path)` to look up an actor by its path. This is not location-transparent and should be used with care.
+  ]
+]
+
+#warning-block("Be careful")[
+ Both methods require you to know the remote actor's path or have it sent to you, which can break location transparency and tightens coupling between actors.
+]
+
+== Receptionist and Service Keys
+
+When an actor needs to be discovered by another actor, the recommended approach is to use the *Receptionist* and *Service Keys*:
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("How discovery works")[
+    - Register a service actor under a typed `ServiceKey[T]`
+    - Other actors query the receptionist through messages, not direct lookups
+    - A `Listing` reply contains the current `Set[ActorRef[T]]` for that key
+  ]
+][
+  #note-block("Dynamic registry")[
+    - `Receptionist.Register(key, ref)` makes an actor discoverable
+    - `Receptionist.Find(...)` gives a point-in-time snapshot
+    - `Receptionist.Subscribe(...)` pushes the first listing and later changes
+  ]
+]
+
+#pagebreak()
+
+#small-code[
+```scala
+val PingServiceKey = ServiceKey[Ping]("pingService")
+
+context.system.receptionist ! Receptionist.Register(PingServiceKey, context.self)
+context.system.receptionist ! Receptionist.Find(PingServiceKey, listingAdapter)
+context.system.receptionist ! Receptionist.Subscribe(PingServiceKey, context.self)
+```
+]
+
+#note-block("Lifecycle")[
+  Several actors may share the same key. Entries disappear when an actor stops, is deregistered, or its node is removed from the cluster.
+]
+
+== Cluster Receptionist
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Cluster semantics")[
+    - Registrations on one node #bold[appear in the receptionist of the other cluster] nodes
+    - State is propagated via distributed data
+    - Convergence is eventual: nodes reach the same service set per `ServiceKey`
+  ]
+][
+  #note-block("Reachability-aware listings")[
+    - `Find` and `Subscribe` only return #bold[reachable] service instances
+    - Unreachable ones are excluded
+    - The full set can still be inspected through `Listing.allServiceInstances`
+  ]
+]
+
+#warning-block("Important constraints")[
+  Cluster receptionist is #bold[great for initial contact] and loose discovery, but all cross-node messages must be serializable and the receptionist *is not meant* for unlimited scale or very high service churn.
+]
+
+== Routers
+
+#feature-block("Why routers exist")[
+  A router is #bold[itself an actor]: you send one message to the router, and it forwards that message to one routee chosen from a set of actors able to handle the same protocol.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Pool router")[
+    - Created from a `Behavior[T]`
+    - Spawns a fixed number of local child
+    - Best when you want parallel workers inside one actor system
+  ]
+][
+  #feature-block("Group router")[
+    - Created from a `ServiceKey[T]`
+    - Uses the receptionist to discover routees
+    - Can route to actors on other reachable cluster nodes
+  ]
+]
+
+#pagebreak()
+
+#note-block("Distributed takeaway")[
+  For clustered applications, the interesting one is the #bold[group router]: it composes naturally with receptionist-based discovery and keeps senders decoupled from concrete actor locations.
+]
+
+== Pool Router
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Semantics")[
+    - `Routers.pool(n)(behavior)` creates `n` routee children
+    - Routees are #bold[always local]: a pool does not distribute work across the cluster
+    - If a child stops, the router removes it from the pool
+  ]
+][
+  #note-block("Operational notes")[
+    - Supervise the worker behavior if failures should restart it
+    - The default strategy is #bold[round robin]
+    - A pool can also recognize special messages that should be #bold[broadcast] to all routees
+  ]
+]
+
+#small-code[
+```scala
+val pool = Routers.pool(poolSize = 4) {
+  Behaviors.supervise(Worker()).onFailure[Exception](SupervisorStrategy.restart)
+}
+val router = ctx.spawn(pool, "worker-pool")
+router ! Worker.DoLog("msg")
+```
+]
+
+== Group Router
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("How it works")[
+    - Register workers under a `ServiceKey[T]`
+    - Build the router with `Routers.group(serviceKey)`
+    - The router subscribes to receptionist listings and forwards messages to discovered routees
+  ]
+][
+  #note-block("Cluster behavior")[
+    - Reachable routees on #bold[any cluster node] may be selected
+    - Membership is #bold[eventually consistent] because discovery relies on receptionist
+    - On startup, the router stashes messages until it receives its first listing
+  ]
+]
+
+#small-code[
+```scala
+val serviceKey = ServiceKey[Worker.Command]("log-worker")
+ctx.system.receptionist ! Receptionist.Register(serviceKey, worker)
+
+val group = Routers.group(serviceKey)
+val router = ctx.spawn(group, "worker-group")
+router ! Worker.DoLog("msg")
+```
+]
+
+#pagebreak()
+
+#warning-block("Important edge case")[
+  After the first receptionist listing, if the discovered set is empty, the group router drops incoming messages. That makes it great for elastic discovery, but not a substitute for guaranteed delivery or back-pressure.
+]
+
+== Routing strategies and limits
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Built-in strategies")[
+    - *Round robin:* fair rotation across routees; default for pool routers
+    - *Random:* good when membership changes often; default for group routers
+    - *Consistent hashing:* same key tends to hit the same routee while membership stays stable
+  ]
+][
+  #warning-block("Performance reality")[
+    - More routees help only if the workload and dispatcher can actually exploit parallelism
+    - For CPU-bound workers, extra routees beyond available threads seldom help
+    - The router head processes incoming messages sequentially, so it can become a bottleneck at very high throughput
+  ]
+]
+
+#pagebreak()
+
+#note-block("When to use what")[
+  Use a #bold[pool router] for local worker parallelism, a #bold[group router] for cluster-aware service discovery, and consider #link("https://pekko.apache.org/docs/pekko/current/typed/cluster-sharding.html", "Cluster Sharding") when you need stable key-based routing with rebalancing.
+]
+
 
 == Serialization
 
-In order to send messages to remote peers, you must devise your serialization policy.
+#feature-block("Why serialization matters")[
+  Messages between actors in the same JVM are passed by reference, but once a message leaves the JVM it must be turned into bytes and reconstructed on the other side.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Recommended choices")[
+    - #bold[Jackson] is the recommended default for application messages
+    - #bold[Protocol Buffers] are a good fit when you want tighter schema control
+    // - Pekko itself uses Protobuf for several internal messages
+  ]
+][
+  #note-block("Core idea")[
+    Pekko separates:
+    - the #bold[serializer implementation]
+    - the #bold[binding] from message type to serializer
+  ]
+]
+
+== Serialization configuration
 
 #small-code[
 #codly(
@@ -261,19 +459,75 @@ In order to send messages to remote peers, you must devise your serialization po
   header-cell-args: (align: center, ),
 )
 ```hocon
-pekko.actor.provider = remote
+pekko.actor.serializers {
+  jackson-cbor = "org.apache.pekko.serialization.jackson.JacksonCborSerializer"
+  proto = "org.apache.pekko.remote.serialization.ProtobufSerializer"
+}
+
 pekko.actor.serialization-bindings {
-  "it.unibo.pcd.pekko.Message" = jackson-cbor
+  "it.unibo.pcd.pekko.CborSerializable" = jackson-cbor
+  "com.google.protobuf.Message" = proto
 }
 ```
 
-Built-in serializers include `jackson-json`, `jackson-cbor`, and `proto`.
-
-Include the dependency on your serializers:
 ```scala
 libraryDependencies += "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion
 ```
 ]
+
+#pagebreak()
+
+#note-block("Binding rule")[
+  Bind a trait, interface, or abstract base class rather than each concrete message class. If more than one binding matches, Pekko uses the most specific one and warns about ambiguous cases.
+]
+
+// == Custom serializers and evolution
+
+// #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+//   #feature-block("Custom serializer guidance")[
+//     - Implement a custom `Serializer` or `SerializerWithStringManifest`
+//     - Prefer `SerializerWithStringManifest` for formats that must evolve over time
+//     - The serializer `identifier` must remain unique and stable
+//   ]
+// ][
+//   #note-block("Why string manifests help")[
+//     - The manifest can encode logical type names or versions
+//     - Old bytes can still be read after classes move or are renamed
+//     - This is especially useful for persistence and rolling updates
+//   ]
+// ]
+
+// #small-code[
+// ```scala
+// val bytes = serialization.serialize(msg).get
+// val serializerId = serialization.findSerializerFor(msg).identifier
+// val manifest = Serializers.manifestFor(serialization.findSerializerFor(msg), msg)
+// ```
+// ]
+
+// #warning-block("Rolling-update rule")[
+//   A serialized message is effectively `(serializer-id, manifest, bytes)`. To migrate to a new serializer safely, first roll out the new serializer class everywhere, and only in a second rolling update bind message types to it.
+// ]
+
+// == Actor refs, testing, and Java serialization
+
+// #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+//   #feature-block("ActorRef inside messages")[
+//     - `ActorRef`s are commonly part of the protocol
+//     - With Jackson they are handled for you
+//     - In custom serializers, use `ActorRefResolver` to turn refs into strings and back
+//   ]
+// ][
+//   #note-block("Verification in tests")[
+//     - `pekko.actor.serialize-messages = on` forces serialization even for local messages
+//     - Useful to catch non-serializable protocols early
+//     - Keep it for tests, not production
+//   ]
+// ]
+
+// #warning-block("Java serialization")[
+//   Java serialization is disabled by default, discouraged in production, and should be treated as a security risk as well as a performance bottleneck. If it ever appears in logs, that deserves attention.
+// ]
 
 == Remote Security
 
@@ -287,9 +541,9 @@ libraryDependencies += "org.apache.pekko" %% "pekko-serialization-jackson" % Pek
   `pekko.remote.artery.untrusted-mode = on` blocks remote deployment, remote DeathWatch, system-stop style messages, and messages marked `PossiblyHarmful`.
 ]
 
-#note-block("Trusted selection paths")[
-  If you need limited actor-selection access, allow only specific paths with `pekko.remote.artery.trusted-selection-paths`.
-]
+// #note-block("Trusted selection paths")[
+//   If you need limited actor-selection access, allow only specific paths with `pekko.remote.artery.trusted-selection-paths`.
+// ]
 
 == Delivery guarantees, remote watch, and quarantine
 
@@ -302,6 +556,8 @@ Artery uses TCP or Aeron as a "reliable" underlying message transport.
   - On de/serialization failure
   - Exception in the remoting infrastructure
 ]
+
+#pagebreak()
 
 #feature-block("Remote Watch and Quarantine")[
   - *Remote watch:* You can watch remote actors just like local actors. A failure detector uses heartbeats to generate `Terminated`.
@@ -495,7 +751,7 @@ if (selfMember.hasRole("backend")) {
 
 #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
   #feature-block("Receptionist & Group router")[
-    - *Receptionist:* Registered actors will appear in the receptionist of other nodes of the cluster (via distributed-data).
+    - *Receptionist:* Service registrations are replicated cluster-wide via distributed data; lookups return reachable instances for a `ServiceKey`.
     - *Group router:* Created for a `ServiceKey`, uses receptionist to discover actors, and routes messages. Cluster-aware out-of-the-box.
   ]
 
@@ -529,6 +785,8 @@ if (selfMember.hasRole("backend")) {
 #feature-block("References")[
   - Apache Pekko Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apache.org/docs/]
   - Pekko Remoting: #link("https://pekko.apache.org/docs/pekko/current/remoting-artery.html")[remoting-artery.html]
+  - Pekko Serialization: #link("https://pekko.apache.org/docs/pekko/current/serialization.html")[serialization.html]
   - Pekko Cluster Specification: #link("https://pekko.apache.org/docs/pekko/current/typed/cluster-concepts.html")[typed/cluster-concepts.html]
   - Pekko Cluster: #link("https://pekko.apache.org/docs/pekko/current/typed/cluster.html")[typed/cluster.html]
+  - Pekko Typed Routers: #link("https://pekko.apache.org/docs/pekko/current/typed/routers.html")[typed/routers.html]
 ]
