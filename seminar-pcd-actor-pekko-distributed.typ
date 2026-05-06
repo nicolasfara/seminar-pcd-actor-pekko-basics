@@ -230,26 +230,6 @@ pekko.remote.artery {
 //   In Pekko/Akka Classic, this was supported through `actorSelection` (retrieving an `ActorRef` from a URL like `pekko://sys@host:port/user/actor`). In Typed, the `Receptionist` is the preferred mechanism.
 // ]
 
-== Joining a cluster programmatically
-
-To #bold[join] a cluster programmatically, send a `Join` message to the Cluster Manager:
-#codly(
-  header: [`cluster / io.github.nicolasfara.es01.cluster.joining.ManualJoin.scala`],
-  header-cell-args: (align: center, ),
-)
-```scala
-val clusterSystem1 = Cluster(system1)
-clusterSystem1.manager ! Join(clusterSystem1.selfMember.address)
-// Other config
-val clusterSystem2 = Cluster(system2)
-clusterSystem2.manager ! Join(clusterSystem1.selfMember.address)
-```
-
-To #bold[leave] the cluster, send a `Leave` message:
-```scala
-clusterSystem1.manager ! Leave(clusterSystem1.selfMember.address)
-```
-
 == Acquiring references to remote actors
 
 To communicate with (remote) actors, you need their `ActorRef`. You can get it by:
@@ -267,167 +247,6 @@ To communicate with (remote) actors, you need their `ActorRef`. You can get it b
 
 #warning-block("Be careful")[
  Both methods require you to know the remote actor's path or have it sent to you, which can break location transparency and tightens coupling between actors.
-]
-
-== Receptionist and Service Keys
-
-When an actor needs to be discovered by another actor, the recommended approach is to use the *Receptionist* and *Service Keys*:
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("How discovery works")[
-    - Register a service actor under a typed `ServiceKey[T]`
-    - Other actors query the receptionist through messages, not direct lookups
-    - A `Listing` reply contains the current `Set[ActorRef[T]]` for that key
-  ]
-][
-  #note-block("Dynamic registry")[
-    - `Receptionist.Register(key, ref)` makes an actor discoverable
-    - `Receptionist.Find(...)` gives a point-in-time snapshot
-    - `Receptionist.Subscribe(...)` pushes the first listing and later changes
-  ]
-]
-
-#pagebreak()
-
-#small-code[
-```scala
-val PingServiceKey = ServiceKey[Ping]("pingService")
-
-context.system.receptionist ! Receptionist.Register(PingServiceKey, context.self)
-context.system.receptionist ! Receptionist.Find(PingServiceKey, listingAdapter)
-context.system.receptionist ! Receptionist.Subscribe(PingServiceKey, context.self)
-```
-]
-
-#note-block("Lifecycle")[
-  Several actors may share the same key. Entries disappear when an actor stops, is deregistered, or its node is removed from the cluster.
-]
-
-== Cluster Receptionist
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Cluster semantics")[
-    - Registrations on one node #bold[appear in the receptionist of the other cluster] nodes
-    - State is propagated via distributed data
-    - Convergence is eventual: nodes reach the same service set per `ServiceKey`
-  ]
-][
-  #note-block("Reachability-aware listings")[
-    - `Find` and `Subscribe` only return #bold[reachable] service instances
-    - Unreachable ones are excluded
-    - The full set can still be inspected through `Listing.allServiceInstances`
-  ]
-]
-
-#warning-block("Important constraints")[
-  Cluster receptionist is #bold[great for initial contact] and loose discovery, but all cross-node messages must be serializable and the receptionist *is not meant* for unlimited scale or very high service churn.
-]
-
-== Routers
-
-#feature-block("Why routers exist")[
-  A router is #bold[itself an actor]: you send one message to the router, and it forwards that message to one routee chosen from a set of actors able to handle the same protocol.
-]
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Pool router")[
-    - Created from a `Behavior[T]`
-    - Spawns a fixed number of local child
-    - Best when you want parallel workers inside one actor system
-  ]
-][
-  #feature-block("Group router")[
-    - Created from a `ServiceKey[T]`
-    - Uses the receptionist to discover routees
-    - Can route to actors on other reachable cluster nodes
-  ]
-]
-
-#pagebreak()
-
-#note-block("Distributed takeaway")[
-  For clustered applications, the interesting one is the #bold[group router]: it composes naturally with receptionist-based discovery and keeps senders decoupled from concrete actor locations.
-]
-
-== Pool Router
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Semantics")[
-    - `Routers.pool(n)(behavior)` creates `n` routee children
-    - Routees are #bold[always local]: a pool does not distribute work across the cluster
-    - If a child stops, the router removes it from the pool
-  ]
-][
-  #note-block("Operational notes")[
-    - Supervise the worker behavior if failures should restart it
-    - The default strategy is #bold[round robin]
-    - A pool can also recognize special messages that should be #bold[broadcast] to all routees
-  ]
-]
-
-#small-code[
-```scala
-val pool = Routers.pool(poolSize = 4) {
-  Behaviors.supervise(Worker()).onFailure[Exception](SupervisorStrategy.restart)
-}
-val router = ctx.spawn(pool, "worker-pool")
-router ! Worker.DoLog("msg")
-```
-]
-
-== Group Router
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("How it works")[
-    - Register workers under a `ServiceKey[T]`
-    - Build the router with `Routers.group(serviceKey)`
-    - The router subscribes to receptionist listings and forwards messages to discovered routees
-  ]
-][
-  #note-block("Cluster behavior")[
-    - Reachable routees on #bold[any cluster node] may be selected
-    - Membership is #bold[eventually consistent] because discovery relies on receptionist
-    - On startup, the router stashes messages until it receives its first listing
-  ]
-]
-
-#small-code[
-```scala
-val serviceKey = ServiceKey[Worker.Command]("log-worker")
-ctx.system.receptionist ! Receptionist.Register(serviceKey, worker)
-
-val group = Routers.group(serviceKey)
-val router = ctx.spawn(group, "worker-group")
-router ! Worker.DoLog("msg")
-```
-]
-
-#pagebreak()
-
-#warning-block("Important edge case")[
-  After the first receptionist listing, if the discovered set is empty, the group router drops incoming messages. That makes it great for elastic discovery, but not a substitute for guaranteed delivery or back-pressure.
-]
-
-== Routing strategies and limits
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Built-in strategies")[
-    - *Round robin:* fair rotation across routees; default for pool routers
-    - *Random:* good when membership changes often; default for group routers
-    - *Consistent hashing:* same key tends to hit the same routee while membership stays stable
-  ]
-][
-  #warning-block("Performance reality")[
-    - More routees help only if the workload and dispatcher can actually exploit parallelism
-    - For CPU-bound workers, extra routees beyond available threads seldom help
-    - The router head processes incoming messages sequentially, so it can become a bottleneck at very high throughput
-  ]
-]
-
-#pagebreak()
-
-#note-block("When to use what")[
-  Use a #bold[pool router] for local worker parallelism, a #bold[group router] for cluster-aware service discovery, and consider #link("https://pekko.apache.org/docs/pekko/current/typed/cluster-sharding.html", "Cluster Sharding") when you need stable key-based routing with rebalancing.
 ]
 
 
@@ -475,7 +294,7 @@ libraryDependencies += "org.apache.pekko" %% "pekko-serialization-jackson" % Pek
 ```
 ]
 
-#pagebreak()
+== Serialization binding rule
 
 #note-block("Binding rule")[
   Bind a trait, interface, or abstract base class rather than each concrete message class. If more than one binding matches, Pekko uses the most specific one and warns about ambiguous cases.
@@ -557,7 +376,7 @@ Artery uses TCP or Aeron as a "reliable" underlying message transport.
   - Exception in the remoting infrastructure
 ]
 
-#pagebreak()
+== Remote Watch and Quarantine
 
 #feature-block("Remote Watch and Quarantine")[
   - *Remote watch:* You can watch remote actors just like local actors. A failure detector uses heartbeats to generate `Terminated`.
@@ -567,81 +386,6 @@ Artery uses TCP or Aeron as a "reliable" underlying message transport.
 ]
 
 = Pekko Clustering
-
-== Cluster Overview
-
-#feature-block("What Pekko Cluster gives you")[
-  Pekko Cluster is a decentralized, peer-to-peer membership service for actor systems spread across multiple nodes.
-  There is no single coordinator or single bottleneck: cluster state is disseminated with gossip and monitored by a failure detector.
-]
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #note-block("Why it matters")[
-    Build one application or service across many nodes while keeping the actor model and location transparency.
-  ]
-][
-  #note-block("Main ingredients")[
-    Membership state, gossip dissemination, automatic failure detection, and deterministic leadership for convergence.
-  ]
-]
-
-== Cluster Vocabulary
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Node")[
-    A logical cluster member identified by a `hostname:port:uid` tuple. Multiple nodes can live on the same machine.
-  ]
-
-  #feature-block("Cluster")[
-    The set of nodes joined together through the Cluster Membership Service.
-  ]
-][
-  #feature-block("Leader")[
-    A role, not a permanently elected machine. When gossip has converged, the leader manages membership transitions.
-  ]
-
-  #feature-block("Reachability")[
-    `reachable` and `unreachable` are cluster states inferred by the failure detector and propagated by gossip.
-  ]
-]
-
-== Gossip, Convergence, and Failure Detection
-
-#feature-block("How membership state is shared")[
-  Cluster state is spread with a gossip protocol. Each state update carries a vector clock, which helps reconcile and merge concurrent changes.
-]
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #note-block("Convergence")[
-    Gossip converges when every node is in the seen set for the current state version.
-    Convergence cannot be reached while some node is `unreachable`.
-  ]
-][
-  #note-block("Failure detector")[
-    A Phi Accrual Failure Detector monitors nodes by heartbeat and marks them `unreachable` or `reachable` again.
-  ]
-]
-
-#warning-block("Partition handling")[
-  If a system message cannot be delivered, the destination can be quarantined.
-  In practice the cluster must down or remove the node, and the quarantined actor system must be restarted before joining again.
-]
-
-== Leader and Seed Nodes
-
-#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
-  #feature-block("Leader responsibilities")[
-    - Promote `joining` members to `up`
-    - Move `exiting` members to `removed`
-    - Act only after gossip convergence
-  ]
-][
-  #feature-block("Seed nodes")[
-    - Contact points for new nodes joining the cluster
-    - Useful for bootstrapping, but not required for steady-state operation
-    - A new member can join through any current member, not just a seed node
-  ]
-]
 
 == Pekko Cluster: basic usage (1/2)
 
@@ -658,6 +402,8 @@ The Cluster extension gives you access to management tasks such as Joining, Leav
 // Access the Cluster extension on a node
 val cluster = Cluster(system)
 ```
+
+== Pekko Cluster: extension references
 
 #note-block("Key references on the Cluster extension")[
   - `manager`: an `ActorRef[ClusterCommand]` (e.g., `Join`, `Leave`, `Down`)
@@ -747,25 +493,191 @@ if (selfMember.hasRole("backend")) {
 } else { /* spawn frontend or other roles */ }
 ```
 
-== Pekko Cluster facilities
+== Pekko Cluster facilities: discovery
 
 #components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
   #feature-block("Receptionist & Group router")[
     - *Receptionist:* Service registrations are replicated cluster-wide via distributed data; lookups return reachable instances for a `ServiceKey`.
     - *Group router:* Created for a `ServiceKey`, uses receptionist to discover actors, and routes messages. Cluster-aware out-of-the-box.
   ]
-
+][
   #feature-block("Distributed data")[
     A cluster-wide key-value store where values are CRDTs. Local updates + replication via gossip + conflict-resolution.
   ]
-][
+]
+
+== Pekko Cluster facilities: placement
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
   #feature-block("Cluster singleton")[
     Support for managing one singleton actor in the entire cluster.
   ]
+][
 
   #feature-block("Cluster sharding")[
     Distribute and interact with actors based on their logical ID. A `ShardRegion` actor extracts entity IDs. A singleton `ShardCoordinator` manages locations.
   ]
+]
+
+== Receptionist and Service Keys
+
+When an actor needs to be discovered by another actor, the recommended approach is to use the *Receptionist* and *Service Keys*:
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("How discovery works")[
+    - Register a service actor under a typed `ServiceKey[T]`
+    - Other actors query the receptionist through messages, not direct lookups
+    - A `Listing` reply contains the current `Set[ActorRef[T]]` for that key
+  ]
+][
+  #note-block("Dynamic registry")[
+    - `Receptionist.Register(key, ref)` makes an actor discoverable
+    - `Receptionist.Find(...)` gives a point-in-time snapshot
+    - `Receptionist.Subscribe(...)` pushes the first listing and later changes
+  ]
+]
+
+== Receptionist and Service Keys: API
+
+#small-code[
+```scala
+val PingServiceKey = ServiceKey[Ping]("pingService")
+
+context.system.receptionist ! Receptionist.Register(PingServiceKey, context.self)
+context.system.receptionist ! Receptionist.Find(PingServiceKey, listingAdapter)
+context.system.receptionist ! Receptionist.Subscribe(PingServiceKey, context.self)
+```
+]
+
+#note-block("Lifecycle")[
+  Several actors may share the same key. Entries disappear when an actor stops, is deregistered, or its node is removed from the cluster.
+]
+
+== Cluster Receptionist
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Cluster semantics")[
+    - Registrations on one node #bold[appear in the receptionist of the other cluster] nodes
+    - State is propagated via distributed data
+    - Convergence is eventual: nodes reach the same service set per `ServiceKey`
+  ]
+][
+  #note-block("Reachability-aware listings")[
+    - `Find` and `Subscribe` only return #bold[reachable] service instances
+    - Unreachable ones are excluded
+    - The full set can still be inspected through `Listing.allServiceInstances`
+  ]
+]
+
+#warning-block("Important constraints")[
+  Cluster receptionist is #bold[great for initial contact] and loose discovery, but all cross-node messages must be serializable and the receptionist *is not meant* for unlimited scale or very high service churn.
+]
+
+== Routers
+
+#feature-block("Why routers exist")[
+  A router is #bold[itself an actor]: you send one message to the router, and it forwards that message to one routee chosen from a set of actors able to handle the same protocol.
+]
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Pool router")[
+    - Created from a `Behavior[T]`
+    - Spawns a fixed number of local child
+    - Best when you want parallel workers inside one actor system
+  ]
+][
+  #feature-block("Group router")[
+    - Created from a `ServiceKey[T]`
+    - Uses the receptionist to discover routees
+    - Can route to actors on other reachable cluster nodes
+  ]
+]
+
+== Routers: distributed takeaway
+
+#note-block("Distributed takeaway")[
+  For clustered applications, the interesting one is the #bold[group router]: it composes naturally with receptionist-based discovery and keeps senders decoupled from concrete actor locations.
+]
+
+== Pool Router
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Semantics")[
+    - `Routers.pool(n)(behavior)` creates `n` routee children
+    - Routees are #bold[always local]: a pool does not distribute work across the cluster
+    - If a child stops, the router removes it from the pool
+  ]
+][
+  #note-block("Operational notes")[
+    - Supervise the worker behavior if failures should restart it
+    - The default strategy is #bold[round robin]
+    - A pool can also recognize special messages that should be #bold[broadcast] to all routees
+  ]
+]
+
+#small-code[
+```scala
+val pool = Routers.pool(poolSize = 4) {
+  Behaviors.supervise(Worker()).onFailure[Exception](SupervisorStrategy.restart)
+}
+val router = ctx.spawn(pool, "worker-pool")
+router ! Worker.DoLog("msg")
+```
+]
+
+== Group Router
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("How it works")[
+    - Register workers under a `ServiceKey[T]`
+    - Build the router with `Routers.group(serviceKey)`
+    - The router subscribes to receptionist listings and forwards messages to discovered routees
+  ]
+][
+  #note-block("Cluster behavior")[
+    - Reachable routees on #bold[any cluster node] may be selected
+    - Membership is #bold[eventually consistent] because discovery relies on receptionist
+    - On startup, the router stashes messages until it receives its first listing
+  ]
+]
+
+#small-code[
+```scala
+val serviceKey = ServiceKey[Worker.Command]("log-worker")
+ctx.system.receptionist ! Receptionist.Register(serviceKey, worker)
+
+val group = Routers.group(serviceKey)
+val router = ctx.spawn(group, "worker-group")
+router ! Worker.DoLog("msg")
+```
+]
+
+== Group Router: empty listings
+
+#warning-block("Important edge case")[
+  After the first receptionist listing, if the discovered set is empty, the group router drops incoming messages. That makes it great for elastic discovery, but not a substitute for guaranteed delivery or back-pressure.
+]
+
+== Routing strategies and limits
+
+#components.side-by-side(columns: (1fr, 1fr), gutter: 1em)[
+  #feature-block("Built-in strategies")[
+    - *Round robin:* fair rotation across routees; default for pool routers
+    - *Random:* good when membership changes often; default for group routers
+    - *Consistent hashing:* same key tends to hit the same routee while membership stays stable
+  ]
+][
+  #warning-block("Performance reality")[
+    - More routees help only if the workload and dispatcher can actually exploit parallelism
+    - For CPU-bound workers, extra routees beyond available threads seldom help
+    - The router head processes incoming messages sequentially, so it can become a bottleneck at very high throughput
+  ]
+]
+
+== Routing strategies: when to use what
+
+#note-block("When to use what")[
+  Use a #bold[pool router] for local worker parallelism, a #bold[group router] for cluster-aware service discovery, and consider #link("https://pekko.apache.org/docs/pekko/current/typed/cluster-sharding.html", "Cluster Sharding") when you need stable key-based routing with rebalancing.
 ]
 
 = Wrap-up
@@ -780,7 +692,7 @@ if (selfMember.hasRole("backend")) {
   Apache Pekko ecosystem.
 ]
 
-#v(1em)
+== References
 
 #feature-block("References")[
   - Apache Pekko Documentation: #link("https://pekko.apache.org/docs/pekko/current/")[pekko.apache.org/docs/]

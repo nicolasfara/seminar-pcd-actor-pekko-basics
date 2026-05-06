@@ -93,6 +93,7 @@
         inset: (x: 0.72em, bottom: 0.8em),
       )[
         #set text(fill: content-color)
+        #set par(justify: false)
         #content
       ]
     ]
@@ -111,7 +112,7 @@
   )
 }
 
-#let note-block(title, content, icon: fa-info-circle() + " ") = {
+#let note-block(title, content, icon: "i ") = {
   styled-block(
     title, 
     content, 
@@ -124,7 +125,7 @@
   )
 }
 
-#let warning-block(title, content, icon: fa-exclamation-triangle() + " ") = {
+#let warning-block(title, content, icon: "! ") = {
   styled-block(
     title, 
     content, 
